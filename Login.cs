@@ -1,47 +1,98 @@
-ta senior ou nao isso?
-
 using System;
+using System.Collections.Generic;
+using System.Net.Mail;
 using System.Text.RegularExpressions;
-using System.Linq;
-public class ValidadorAcesso
+
+namespace Autenticacao.Validacao
 {
-    // Regex para validar o formato básico de um e-mail
-    private static readonly string EmailPattern = @"^[^@\s]+@[^@\s]+\.[^@\s]+$";
-    public static bool ValidarEmail(string email)
+    /// <summary>
+    /// Resultado de uma operação de validação.
+    /// Carrega todos os erros encontrados, não apenas o primeiro.
+    /// </summary>
+    public sealed class ResultadoValidacao
     {
-        if (string.IsNullOrWhiteSpace(email)) return false;
-        
-        return Regex.IsMatch(email, EmailPattern, RegexOptions.IgnoreCase);
-    }
-    public static (bool Sucesso, string Mensagem) ValidarSenha(string senha)
-    {
-        if (string.IsNullOrWhiteSpace(senha)) 
-            return (false, "A senha não pode estar vazia.");
-        if (senha.Length < 8) 
-            return (false, "A senha deve ter pelo menos 8 caracteres.");
-        if (!senha.Any(char.IsUpper)) 
-            return (false, "A senha deve conter ao menos uma letra maiúscula.");
-        if (!senha.Any(char.IsLower)) 
-            return (false, "A senha deve conter ao menos uma letra minúscula.");
-        if (!senha.Any(char.IsDigit)) 
-            return (false, "A senha deve conter ao menos um número.");
-        if (!senha.Any(ch => !char.IsLetterOrDigit(ch))) 
-            return (false, "A senha deve conter ao menos um caractere especial (ex: @, #, $).");
-        return (true, "Senha válida!");
-    }
-}
-// Exemplo de Uso
-public class Program
-{
-    public static void Main()
-    {
-        string meuEmail = "contato@exemplo.com";
-        string minhaSenha = "Senha@Forte2026";
-        if (ValidadorAcesso.ValidarEmail(meuEmail))
+        public bool Sucesso => Erros.Count == 0;
+        public IReadOnlyList<string> Erros { get; }
+
+        private ResultadoValidacao(List<string> erros) => Erros = erros.AsReadOnly();
+
+        public static ResultadoValidacao Ok() => new(new List<string>());
+        public static ResultadoValidacao Falha(List<string> erros) => new(erros);
+
+        /// <summary>Lança InvalidOperationException se a validação falhou.</summary>
+        public void ThrowIfInvalid(string paramName = "valor")
         {
-            Console.WriteLine("E-mail válido.");
+            if (!Sucesso)
+                throw new InvalidOperationException(
+                    $"Validação de '{paramName}' falhou: {string.Join("; ", Erros)}"
+                );
         }
-        var resultadoSenha = ValidadorAcesso.ValidarSenha(minhaSenha);
-        Console.WriteLine(resultadoSenha.Mensagem);
+    }
+
+    public static class ValidadorAcesso
+    {
+        // MailAddress do próprio .NET faz o parsing correto de RFC 5321,
+        // cobrindo edge cases que regex simples não trata (ex: quoted strings,
+        // domínios internacionalizados). O try/catch é intencional aqui.
+        public static bool ValidarEmail(string email)
+        {
+            if (string.IsNullOrWhiteSpace(email))
+                return false;
+
+            try
+            {
+                var addr = new MailAddress(email);
+                // MailAddress aceita "Nome <email@dominio.com>" — garantir que
+                // o input seja somente o endereço, sem display name.
+                return addr.Address == email.Trim();
+            }
+            catch (FormatException)
+            {
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Valida a senha contra todas as regras e retorna TODOS os erros,
+        /// não apenas o primeiro. Isso permite que o frontend mostre um
+        /// checklist completo em vez de forçar o usuário a submeter várias vezes.
+        /// </summary>
+        public static ResultadoValidacao ValidarSenha(string senha)
+        {
+            var erros = new List<string>();
+
+            if (string.IsNullOrWhiteSpace(senha))
+            {
+                // Falha crítica — não faz sentido continuar checando.
+                return ResultadoValidacao.Falha(new List<string> { "A senha não pode estar vazia." });
+            }
+
+            if (senha.Length < 8)
+                erros.Add("A senha deve ter pelo menos 8 caracteres.");
+
+            if (!ContémTipo(senha, char.IsUpper))
+                erros.Add("A senha deve conter ao menos uma letra maiúscula.");
+
+            if (!ContémTipo(senha, char.IsLower))
+                erros.Add("A senha deve conter ao menos uma letra minúscula.");
+
+            if (!ContémTipo(senha, char.IsDigit))
+                erros.Add("A senha deve conter ao menos um número.");
+
+            if (!ContémTipo(senha, ch => !char.IsLetterOrDigit(ch)))
+                erros.Add("A senha deve conter ao menos um caractere especial (ex: @, #, $).");
+
+            return erros.Count == 0
+                ? ResultadoValidacao.Ok()
+                : ResultadoValidacao.Falha(erros);
+        }
+
+        // Helper local — evita repetir a lógica de iteração em cada regra.
+        private static bool ContémTipo(string valor, Func<char, bool> predicate)
+        {
+            foreach (var ch in valor)
+                if (predicate(ch)) return true;
+            return false;
+        }
     }
 }
